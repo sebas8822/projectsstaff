@@ -1,9 +1,10 @@
-
 from __future__ import print_function
+
+import json
 
 # Firebase
 import firebase_admin
-from firebase_admin import credentials # for authentication
+from firebase_admin import credentials  # for authentication
 from firebase_admin import firestore
 import imaplib
 import email
@@ -11,7 +12,7 @@ import email
 # Gmail API
 import base64
 import os.path
-import time
+
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -20,17 +21,20 @@ from googleapiclient.errors import HttpError
 
 # Schedule Task
 import schedule
-
-
+import time
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
+
 def main():
     # Initialize FireBase Function
     db = init_firebase()
-    # Fetch the data for users with mailbox service enabled
-    check_firebase_inbox_update(db)
+
+    while True:
+        # Fetch the data for users with mailbox service enabled
+        check_firebase_inbox_update(db)
+        time.sleep(60)  # wait for 10 minutes
 
 
 def init_firebase():
@@ -41,6 +45,7 @@ def init_firebase():
     db = firestore.client()
     return db
 
+
 def check_firebase_inbox_update(db):
     # Get a reference to the 'user' collection in the database
     users_ref_parent = db.collection('user')
@@ -50,20 +55,23 @@ def check_firebase_inbox_update(db):
     for user in users:
         # Get the value of the 'mailboxId' field for this user
         mailbox_id = user.to_dict().get('mailboxId')
+        # Get Token user to access email
+
+
         # Check if the 'mailboxId' field exists
         if mailbox_id:
             # Check if the 'isMailboxServiceOn' field is set to True
             if user.get('isMailboxServiceOn') == True:
                 # If the 'mailboxId' field exists and 'isMailboxServiceOn' is True, retrieve the unread email count
                 unreadEmailCount = user.to_dict().get('unreadEmailCount')
-                print("Current messages in Database: ", unreadEmailCount)
+                print("User: ",user.id,"Current messages in Database: ", unreadEmailCount, )
                 # Call the 'check_user_inbox_unread' function to get the current unread message count in the user's inbox
-                current_user_unread_msg = check_user_inbox_unread()
+                current_user_unread_msg = check_user_inbox_unread(db, user)
                 print("Current messages in User Inbox: ", current_user_unread_msg)
                 # Compare the unread email count from the database with the current unread message count in the user's inbox
                 if not current_user_unread_msg == unreadEmailCount:
                     # Read the emails and save them into firebase
-                    save_emails_to_Firebase(db, user, read_emails_DB(db))
+                    save_emails_to_Firebase(db, user, read_emails_DB(db, user))
                     # Update unreadEmailCount in firebase with current current_user_unread_msg value
                     user.reference.update({'unreadEmailCount': current_user_unread_msg})
 
@@ -71,6 +79,67 @@ def check_firebase_inbox_update(db):
 
 
 
+def get_credentials(db,user):
+    """
+    This function retrieves the Gmail API credentials.
+    If token is not present in Firebase, it will create a new token by going through the authorization flow and store it in Firebase.
+    """
+    creds = None
+    users_ref_parent = db.collection('user')
+    user_token = users_ref_parent.document(user.id).get().to_dict().get('token')
+    if user_token:
+        creds = Credentials.from_authorized_user_info(info=user_token, scopes=SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                'C:/Users/sebas/Desktop/Workspace/JobSearchNinja/credentials.json',
+                SCOPES)  # complete address for safe reasons
+            creds = flow.run_local_server(port=0)
+        # Save the new credentials in Firebase
+        users_ref_parent.document(user.id).set({'token': creds.to_json()}, merge=True)
+    return creds
+
+
+
+
+'''
+def get_credentials(token):
+    """
+    This function retrieves the Gmail API credentials using the token stored in Firebase.
+    """
+    creds = None
+    token = json.loads(token)
+    # Check if the token is valid
+    if token:
+        creds = Credentials.from_authorized_user_info(info=token, scopes=SCOPES)
+    # If there are no (valid) credentials available, let the user log in.
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                'C:/Users/sebas/Desktop/Workspace/JobSearchNinja/credentials.json',
+                SCOPES)  # complete address for safe reasons
+            creds = flow.run_local_server(port=0)
+
+    return creds
+
+'''
+
+
+
+
+
+
+
+
+
+
+
+
+'''
 def get_credentials():
     """
     This function retrieves the Gmail API credentials.
@@ -93,7 +162,9 @@ def get_credentials():
         # Save the credentials for the next run
         with open('token.json', 'w') as token:
             token.write(creds.to_json())
+            
     return creds
+'''
 
 def call_gmail_api(creds):
     """
@@ -110,6 +181,7 @@ def call_gmail_api(creds):
         print(f'An error occurred: {error}')
         return None
 
+
 def count_unread_messages(messages):
     """
     This function counts the number of unread messages.
@@ -120,18 +192,20 @@ def count_unread_messages(messages):
     else:
         return len(messages)
 
-def check_user_inbox_unread():
+
+def check_user_inbox_unread(db, user):
     """
     This function retrieves the number of unread messages in the Gmail inbox.
     """
-    creds = get_credentials()
+    creds = get_credentials(db, user)
     messages = call_gmail_api(creds)
     unread_count = count_unread_messages(messages)
     return unread_count
 
-def read_emails_DB(db):
+
+def read_emails_DB(db, user):
     # Call the function that retrieves the Gmail API credentials
-    creds = get_credentials()
+    creds = get_credentials(db, user)
     # Call the function that retrieves the list of messages
     messages = call_gmail_api(creds)
     # Build the Gmail API service
@@ -191,6 +265,7 @@ def read_emails_DB(db):
     # Return email_data_list
     return email_data_list
 
+
 def save_emails_to_Firebase(db, user, email_data_list):
     # Get a reference to the 'user' collection in the database
     users_ref_parent = db.collection('user')
@@ -205,9 +280,7 @@ def save_emails_to_Firebase(db, user, email_data_list):
         })
 
 
-
-
-
-
 if __name__ == '__main__':
     main()
+
+
