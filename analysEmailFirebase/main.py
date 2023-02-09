@@ -8,7 +8,8 @@ from firebase_admin import firestore
 import imaplib
 import email
 
-#Gmail API
+# Gmail API
+import base64
 import os.path
 import time
 from google.auth.transport.requests import Request
@@ -16,6 +17,10 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
+# Schedule Task
+import schedule
+
 
 
 # If modifying these scopes, delete the file token.json.
@@ -25,7 +30,7 @@ def main():
     # Initialize FireBase Function
     db = init_firebase()
     # Fetch the data for users with mailbox service enabled
-    fetch_users_true(db)
+    check_firebase_inbox_update(db)
 
 
 def init_firebase():
@@ -36,7 +41,7 @@ def init_firebase():
     db = firestore.client()
     return db
 
-def fetch_users_true(db):
+def check_firebase_inbox_update(db):
     # Get a reference to the 'user' collection in the database
     users_ref_parent = db.collection('user')
     # Get a stream of all documents in the 'user' collection
@@ -57,22 +62,10 @@ def fetch_users_true(db):
                 print("Current messages in User Inbox: ", current_user_unread_msg)
                 # Compare the unread email count from the database with the current unread message count in the user's inbox
                 if not current_user_unread_msg == unreadEmailCount:
-                    # If the unread email count from the database does not match the current unread message count in the user's inbox
-                    # Get a reference to the 'email' collection for this user
-
-                    read_emails_write_DB(db)
-
-                    """
-                    user_email_ref = users_ref_parent.document(user.id).collection("email")
-                    # Get a stream of all documents in the 'email' collection for this user
-                    user_emails = user_email_ref.stream()
-                    # Loop through all the documents in the child collection
-                    for email in user_emails:
-                        # Print the ID and data for each email document
-                        print(f"email ID: {email.id}")
-                        print(f"email data: {email.to_dict()}")
-                        """
-
+                    # Read the emails and save them into firebase
+                    save_emails_to_Firebase(db, user, read_emails_DB(db))
+                    # Update unreadEmailCount in firebase with current current_user_unread_msg value
+                    user.reference.update({'unreadEmailCount': current_user_unread_msg})
 
 
 
@@ -136,31 +129,80 @@ def check_user_inbox_unread():
     unread_count = count_unread_messages(messages)
     return unread_count
 
-def read_emails_write_DB(db):
+def read_emails_DB(db):
+    # Call the function that retrieves the Gmail API credentials
     creds = get_credentials()
+    # Call the function that retrieves the list of messages
     messages = call_gmail_api(creds)
+    # Build the Gmail API service
     service = build('gmail', 'v1', credentials=creds)
-
-
-
+    # Initialize an empty list to store the data of each email
+    email_data_list = []
+    # Loop through each message in the list of messages
     for message in messages:
+        # Get the details of the current message
         msg = service.users().messages().get(userId='me', id=message['id']).execute()
-        email_data = msg['payload']['headers']
-        for values in email_data:
+        # Get the headers of the current message
+        headers = msg['payload']['headers']
+        # Initialize an empty dictionary to store the data of the current email
+        email_data = {}
+        # Loop through each header in the headers of the current message
+        for values in headers:
+            # Get the name of the current header
             name = values["name"]
+            # If the name of the current header is "From", store the value in the "from" key of the email_data dictionary
             if name == 'From':
                 from_name = values["value"]
-                print("You have a new message from: " + from_name + '\n')
-                print(msg['snippet'] + "..." + '\n')
+                email_data['from'] = from_name
+            # If the name of the current header is "Date", store the value in the "date" key of the email_data dictionary
+            if name == 'Date':
+                date = values["value"]
+                email_data['date'] = date
+        # If the current message has parts
+        if 'parts' in msg['payload']:
+            # Get the parts of the current message
+            parts = msg['payload']['parts']
+            # Loop through each part in the parts of the current message
+            for part in parts:
+                # If the mime type of the current part is "text/plain"
+                if part['mimeType'] == 'text/plain':
+                    # Get the data of the current part
+                    body = part['body']['data']
+                    # Decode the data of the current part
+                    body = base64.urlsafe_b64decode(body.encode('UTF-8'))
+                    # Convert the decoded data to a string
+                    body = body.decode('utf-8')
+                    # Store the decoded data in the "body" key of the email_data dictionary
+                    email_data['body'] = body
+        # If the current message does not have parts
+        else:
+            # Get the data of the current message
+            body = msg['payload']['body']['data']
+            # Decode the data of the current message
+            body = base64.urlsafe_b64decode(body.encode('UTF-8'))
+            # Convert the decoded data to a string
+            body = body.decode('utf-8')
+            # Store the decoded data in the "body" key of the email_data dictionary
+            email_data['body'] = body
+        # Append the email_data dictionary to the email_data_list
+        email_data_list.append(email_data)
+    # Print the email_data_list
+    print(email_data_list)
+    # Return email_data_list
+    return email_data_list
 
-                # Add the email data to the Firestore database
-                doc_ref = db.collection("emails").document()
-                doc_ref.set({
-                    "from": from_name,
-                    "snippet": msg['snippet']
-                })
-
-
+def save_emails_to_Firebase(db, user, email_data_list):
+    # Get a reference to the 'user' collection in the database
+    users_ref_parent = db.collection('user')
+    # Get a reference to the child collection
+    user_email_ref_child = users_ref_parent.document(user.id).collection("email")
+    for email_data in email_data_list:
+        # Add a document to the child collection
+        user_email_ref_child.add({
+            "from": email_data.get("from"),
+            "date": email_data.get("date"),
+            "body": email_data.get("body")
+        })
 
 
 
