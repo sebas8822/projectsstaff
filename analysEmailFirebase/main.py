@@ -18,9 +18,12 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+import email.utils
+import datetime
+from datetime import datetime
+
 
 # Schedule Task
-import schedule
 import time
 
 # If modifying these scopes, delete the file token.json.
@@ -34,7 +37,7 @@ def main():
     while True:
         # Fetch the data for users with mailbox service enabled
         check_firebase_inbox_update(db)
-        time.sleep(60)  # wait for 10 minutes
+        time.sleep(600)  # wait for 10 minutes
 
 
 def init_firebase():
@@ -55,116 +58,93 @@ def check_firebase_inbox_update(db):
     for user in users:
         # Get the value of the 'mailboxId' field for this user
         mailbox_id = user.to_dict().get('mailboxId')
-        # Get Token user to access email
-
-
         # Check if the 'mailboxId' field exists
         if mailbox_id:
-            # Check if the 'isMailboxServiceOn' field is set to True
+            # Check if the 'isMailboxServiceOn' field is set to True means User has an active service
             if user.get('isMailboxServiceOn') == True:
+                """
+                I can change this to check the date of the last unread email 
+                """
+                lastMsgInboxDate = user.to_dict().get('lastMsgInboxDate')
+                print("lastMsgInboxDate: ", lastMsgInboxDate, "type: ", type(lastMsgInboxDate))
+
+                lastMsgInboxDateGmail = get_last_date(read_emails_DB(db, user))
+
+                print("Last Date unread message from User Gmail: ", lastMsgInboxDateGmail, "lastMsgInboxDateGmail", type(lastMsgInboxDateGmail))
+                print(lastMsgInboxDateGmail==lastMsgInboxDate)
+
+                if not lastMsgInboxDateGmail == lastMsgInboxDate:
+                    # Read the emails and save them into firebase
+                    save_emails_to_Firebase(db, user, read_emails_DB(db, user),lastMsgInboxDate)
+                    # Update unreadEmailCount in firebase with current current_user_unread_msg value
+                    user.reference.update({'lastMsgInboxDate': lastMsgInboxDateGmail})
+
+
+                '''
                 # If the 'mailboxId' field exists and 'isMailboxServiceOn' is True, retrieve the unread email count
                 unreadEmailCount = user.to_dict().get('unreadEmailCount')
-                print("User: ",user.id,"Current messages in Database: ", unreadEmailCount, )
+                print("User: ", user.id, "Current messages in Database: ", unreadEmailCount, )
+                
                 # Call the 'check_user_inbox_unread' function to get the current unread message count in the user's inbox
                 current_user_unread_msg = check_user_inbox_unread(db, user)
                 print("Current messages in User Inbox: ", current_user_unread_msg)
+
+
                 # Compare the unread email count from the database with the current unread message count in the user's inbox
                 if not current_user_unread_msg == unreadEmailCount:
                     # Read the emails and save them into firebase
                     save_emails_to_Firebase(db, user, read_emails_DB(db, user))
                     # Update unreadEmailCount in firebase with current current_user_unread_msg value
                     user.reference.update({'unreadEmailCount': current_user_unread_msg})
+                '''
 
 
-
-
-
-def get_credentials(db,user):
+def get_credentials(db, user):
     """
-    This function retrieves the Gmail API credentials.
-    If token is not present in Firebase, it will create a new token by going through the authorization flow and store it in Firebase.
+    This function retrieves the Gmail API credentials from Firebase.
+    If the token is not found in Firebase, a new token will be created and saved in Firebase.
     """
-    creds = None
-    users_ref_parent = db.collection('user')
-    user_token = users_ref_parent.document(user.id).get().to_dict().get('token')
-    if user_token:
+    # Reference to the users collection in Firebase
+    users_ref = db.collection('user')
+    # Reference to the specific user's document in Firebase
+    user_ref = users_ref.document(user.id)
+
+    # Retrieve the token stored in the user's document in Firebase
+    user_token = user_ref.get().to_dict().get('token')
+    #print("User ID: ", user.id, "Customer Token: ",user_token)
+
+    if user_token is None:
+        creds = None
+        # Check if token.json exists
+        if os.path.exists('token.json'):
+            # If token.json exists, load credentials from it
+            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+        # If there are no (valid) credentials available, let the user log in.
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                # If credentials are expired, refresh them
+                creds.refresh(Request())
+            else:
+                # If there are no valid or expired credentials, create a new set of credentials
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    'C:/Users/sebas/Desktop/Workspace/JobSearchNinja/credentials.json',
+                    SCOPES)  # complete address for safe reasons
+                creds = flow.run_local_server(port=0)
+            # Save the credentials for the next run
+            with open('token.json', 'w') as token:
+                token.write(creds.to_json())
+        # Convert credentials to JSON and save in the user's document in Firebase
+        user_token = creds.to_json()
+        user_ref.set({'token': user_token})
+    else:
+        # If the token is found in Firebase, load it and convert to credentials
+        user_token = json.loads(user_token)
         creds = Credentials.from_authorized_user_info(info=user_token, scopes=SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'C:/Users/sebas/Desktop/Workspace/JobSearchNinja/credentials.json',
-                SCOPES)  # complete address for safe reasons
-            creds = flow.run_local_server(port=0)
-        # Save the new credentials in Firebase
-        users_ref_parent.document(user.id).set({'token': creds.to_json()}, merge=True)
-    return creds
-
-
-
-
-'''
-def get_credentials(token):
-    """
-    This function retrieves the Gmail API credentials using the token stored in Firebase.
-    """
-    creds = None
-    token = json.loads(token)
-    # Check if the token is valid
-    if token:
-        creds = Credentials.from_authorized_user_info(info=token, scopes=SCOPES)
-    # If there are no (valid) credentials available, let the user log in.
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'C:/Users/sebas/Desktop/Workspace/JobSearchNinja/credentials.json',
-                SCOPES)  # complete address for safe reasons
-            creds = flow.run_local_server(port=0)
 
     return creds
 
-'''
 
 
-
-
-
-
-
-
-
-
-
-
-'''
-def get_credentials():
-    """
-    This function retrieves the Gmail API credentials.
-    If token.json exists, the function will try to use that first to retrieve the credentials.
-    If not, it will create a new token.json file by going through the authorization flow.
-    """
-    creds = None
-    # Check if token.json exists
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    # If there are no (valid) credentials available, let the user log in.
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'C:/Users/sebas/Desktop/Workspace/JobSearchNinja/credentials.json',
-                SCOPES)  # complete address for safe reasons
-            creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-            
-    return creds
-'''
 
 def call_gmail_api(creds):
     """
@@ -201,6 +181,15 @@ def check_user_inbox_unread(db, user):
     messages = call_gmail_api(creds)
     unread_count = count_unread_messages(messages)
     return unread_count
+
+
+def get_last_date(email_data_list):
+    # Initialize a variable to store the last date
+    last_date = email_data_list[0]['date']
+
+    return last_date
+
+
 
 
 def read_emails_DB(db, user):
@@ -266,18 +255,41 @@ def read_emails_DB(db, user):
     return email_data_list
 
 
-def save_emails_to_Firebase(db, user, email_data_list):
+def save_emails_to_Firebase(db, user, email_data_list, lastMsgInboxDate):
+    print("lastMsgInboxDate: ", lastMsgInboxDate, type(lastMsgInboxDate))
+
+    if lastMsgInboxDate == "":
+        lastMsgInboxDate = "Fri, 01 Jan 2023 00:00:00 +0000"
+
+    # format  = lastMsgInboxDate is like "Fri, 10 Feb 2023 03:25:47 +0000"
     # Get a reference to the 'user' collection in the database
     users_ref_parent = db.collection('user')
     # Get a reference to the child collection
+    ref_date = format_date(lastMsgInboxDate)
+
     user_email_ref_child = users_ref_parent.document(user.id).collection("email")
     for email_data in email_data_list:
-        # Add a document to the child collection
-        user_email_ref_child.add({
-            "from": email_data.get("from"),
-            "date": email_data.get("date"),
-            "body": email_data.get("body")
-        })
+        date = format_date(email_data.get("date"))
+        # Check if the date of the current email is greater than the last recorded date
+        if date > ref_date:
+            # Add a document to the child collection
+            user_email_ref_child.add({
+                "from": email_data.get("from"),
+                "date": email_data.get("date"),
+                "body": email_data.get("body")
+            })
+
+def format_date(date_str):
+    print("format_date", date_str)
+    # Date string format: "Fri, 10 Feb 2023 03:25:47 +0000"
+    # Remove the time zone information
+
+    date_str = date_str[:24]
+    print("format_date", date_str)
+    # Convert the date string to a datetime object
+    date = datetime.strptime(date_str, '%a, %d %b %Y %H:%M:%S')
+    # Return the formatted date string
+    return date.strftime('%Y-%m-%d %H:%M:%S')
 
 
 if __name__ == '__main__':
