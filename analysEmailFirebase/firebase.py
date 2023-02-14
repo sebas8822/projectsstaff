@@ -13,3 +13,7 @@ def init_firebase():
     # Connect to the Firestore database
     db = firestore.client()
     return db
+
+
+def generate_id():
+    return firestore.DEFAULT_DOCUMENT_ID

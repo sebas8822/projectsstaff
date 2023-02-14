@@ -69,7 +69,7 @@ def call_gmail_api(creds):
         # Call the Gmail API
         service = build('gmail', 'v1', credentials=creds)
         # results = service.users().messages().list(userId='me', labelIds=['INBOX'], q="is:unread").execute()
-        results = service.users().messages().list(userId='me', labelIds=['INBOX'], maxResults=500).execute()
+        results = service.users().messages().list(userId='me', labelIds=['INBOX'], maxResults=50).execute()
         messages = results.get('messages', [])
         return messages
     except HttpError as error:
@@ -182,29 +182,42 @@ def save_emails_to_Firebase(db, user, email_data_list, lastMsgInboxDate):
     # Get a reference to the 'user' collection in the database
     users_ref_parent = db.collection('user')
     # Get a reference to the child collection
+
+    # Create a batch object
+    batch = db.batch()
+
+    # Get a reference to the user document
+    user_ref = users_ref_parent.document(user.id)
+
+    # Get a reference to the child collection
+    user_email_ref_child = user_ref.collection("email")
+
     ref_date = format_date(lastMsgInboxDate)
+    # Get count emails saved in Firestore
+    unreadEmailCount = user.to_dict().get('unreadEmailCount')
 
-    user_email_ref_child = users_ref_parent.document(user.id).collection("email")
     for email_data in email_data_list:
-
 
         date = format_date(email_data.get("date"))
         # Check if the date of the current email is greater than the last recorded date
         if date > ref_date:
-
-
-            # Add a document to the child collection
-            user_email_ref_child.add({
+            # Generate a new document reference and add set() operation to the batch
+            email_doc_ref = user_email_ref_child.document()
+            batch.set(email_doc_ref, {
                 "from": email_data.get("from"),
-                "Subject":email_data.get("subject"),
+                "Subject": email_data.get("subject"),
                 "date": email_data.get("date"),
                 "body": email_data.get("body")
-
             })
+
             count_emails_save += 1
+
             print(count_emails_save, "Subject: ", email_data.get("subject"), "date: ", email_data.get("date"))
 
+    # Commit the batch
+    batch.commit()
 
+    user.reference.update({'unreadEmailCount': count_emails_save + unreadEmailCount})
 
 def format_date(date_str):
     # Date string format: "Fri, 10 Feb 2023 03:25:47 +0000"
