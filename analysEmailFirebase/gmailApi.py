@@ -68,7 +68,8 @@ def call_gmail_api(creds):
     try:
         # Call the Gmail API
         service = build('gmail', 'v1', credentials=creds)
-        results = service.users().messages().list(userId='me', labelIds=['INBOX'], q="is:unread").execute()
+        # results = service.users().messages().list(userId='me', labelIds=['INBOX'], q="is:unread").execute()
+        results = service.users().messages().list(userId='me', labelIds=['INBOX'], maxResults=500).execute()
         messages = results.get('messages', [])
         return messages
     except HttpError as error:
@@ -133,6 +134,9 @@ def read_emails_DB(db, user):
             if name == 'Date':
                 date = values["value"]
                 email_data['date'] = date
+            if name == 'Subject':
+                subject = values["value"]
+                email_data['subject'] = subject
         # If the current message has parts
         if 'parts' in msg['payload']:
             # Get the parts of the current message
@@ -162,12 +166,13 @@ def read_emails_DB(db, user):
         # Append the email_data dictionary to the email_data_list
         email_data_list.append(email_data)
     # Print the email_data_list
-    print(email_data_list)
+    # print(email_data_list)
     # Return email_data_list
     return email_data_list
 
 
 def save_emails_to_Firebase(db, user, email_data_list, lastMsgInboxDate):
+    count_emails_save = 0
     print("lastMsgInboxDate: ", lastMsgInboxDate, type(lastMsgInboxDate))
 
     if lastMsgInboxDate == "":
@@ -181,15 +186,24 @@ def save_emails_to_Firebase(db, user, email_data_list, lastMsgInboxDate):
 
     user_email_ref_child = users_ref_parent.document(user.id).collection("email")
     for email_data in email_data_list:
+
+
         date = format_date(email_data.get("date"))
         # Check if the date of the current email is greater than the last recorded date
         if date > ref_date:
+
+
             # Add a document to the child collection
             user_email_ref_child.add({
                 "from": email_data.get("from"),
+                "Subject":email_data.get("subject"),
                 "date": email_data.get("date"),
                 "body": email_data.get("body")
+
             })
+            count_emails_save += 1
+            print(count_emails_save, "Subject: ", email_data.get("subject"), "date: ", email_data.get("date"))
+
 
 
 def format_date(date_str):
