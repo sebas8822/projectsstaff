@@ -27,18 +27,21 @@ def check_firebase_inbox_update(db):
         # Get the value of the 'mailboxId' field for this user
         mailbox_id = user.to_dict().get('mailboxId')
         # Check if the 'mailboxId' field exists
+        
         if mailbox_id:
             # Check if the 'isMailboxServiceOn' field is set to True means User has an active service
             if user.get('isMailboxServiceOn') == True:
                 lastMsgInboxDate = user.to_dict().get('lastMsgInboxDate')
+                print("lastMsgInboxDate: ",lastMsgInboxDate)
                 # print("lastMsgInboxDate: ", lastMsgInboxDate, "type: ", type(lastMsgInboxDate))
-                lastMsgInboxDateGmail = get_last_date(read_emails_DB(db, user))
+                lastMsgInboxDateGmail = get_last_date(read_emails_DB(db, user,1))
                 # print("Last Date unread message from User Gmail: ", lastMsgInboxDateGmail, "lastMsgInboxDateGmail", type(lastMsgInboxDateGmail))
                 # print(lastMsgInboxDateGmail==lastMsgInboxDate)
-
+                print("lastMsgInboxDateGmail: ",lastMsgInboxDateGmail)        
                 if not lastMsgInboxDateGmail == lastMsgInboxDate:
+                    read_emails_user = read_emails_DB(db, user,0)
                     # Read the emails and save them into firebase
-                    save_emails_to_Firebase(db, user, read_emails_DB(db, user), lastMsgInboxDate)
+                    save_emails_to_Firebase(db, user, read_emails_user, lastMsgInboxDate)
                     # Update unreadEmailCount in firebase with current current_user_unread_msg value
                     user.reference.update({'lastMsgInboxDate': lastMsgInboxDateGmail})
 
