@@ -1,6 +1,12 @@
 # Gmail API
+import os
+import json
 import base64
 import os.path
+
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import firestore
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -11,6 +17,7 @@ import email.utils
 import datetime
 from datetime import datetime, timedelta
 import json
+
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
@@ -28,9 +35,8 @@ def get_credentials(db, user):
 
     # Retrieve the token stored in the user's document in Firebase
     user_token = user_ref.get().to_dict().get('token')
-    # print("User ID: ", user.id, "Customer Token: ",user_token)
 
-    if user_token is None:
+    if user_token is None or user_token == '':
         creds = None
         # Check if token.json exists
         if os.path.exists('token.json'):
@@ -47,70 +53,43 @@ def get_credentials(db, user):
                     'C:/Users/sebas/Desktop/Workspace/JobSearchNinja/credentials.json',
                     SCOPES)  # complete address for safe reasons
                 creds = flow.run_local_server(port=0)
-            # Save the credentials for the next run
-            with open('token.json', 'w') as token:
-                token.write(creds.to_json())
+
         # Convert credentials to JSON and save in the user's document in Firebase
         user_token = creds.to_json()
-        user_ref.set({'token': user_token})
+        user_ref.update({'token': user_token})
     else:
         # If the token is found in Firebase, load it and convert to credentials
         user_token = json.loads(user_token)
-        creds = Credentials.from_authorized_user_info(info=user_token, scopes=SCOPES)
+        creds = Credentials.from_authorized_user_info(
+            info=user_token, scopes=SCOPES)
 
     return creds
 
 
-def get_total_messages():
-    
-    try:
-        service = build('gmail', 'v1', credentials=creds)
-        # Call the Gmail API to get the total number of messages in the mailbox
-        response = service.users().messages().list(userId='me', labelIds=["INBOX"], maxResults=1).execute()
-        total_messages = response.get('resultSizeEstimate', 0)
-        return total_messages
-    except HttpError as error:
-        print(f'An error occurred: {error}')
-        return None
-
-def subtract_60_minutes(date_string):
-    # Convert the string to a datetime object
-    date = datetime.strptime(date_string, "%Y-%m-%d %H:%M:%S")
-    
-    # Subtract 10 minutes from the datetime object
-    new_date = date - timedelta(days=1)
-    
-    # Convert the datetime object back to a string in the same format as the original
-    new_date_string = datetime.strftime(new_date, "%Y-%m-%d %H:%M:%S")
-    
-    return new_date_string
-
-
-def call_gmail_api(creds,user, num):
+def call_gmail_api(creds, user):
     """
     This function calls the Gmail API to retrieve the unread messages in the inbox.
     """
     print("Init call_gmail_api")
 
-    if num == 0 or num is None:
-        num = 50
-    else:
-        num = 1
-
     lastMsgInboxDate = user.to_dict().get('lastMsgInboxDate')
 
     if lastMsgInboxDate is None or lastMsgInboxDate == "":
-        read_emails_after = "after:2023/01/01"
-    else: 
-        read_emails_after = "before:" + format_date(lastMsgInboxDate)
+        read_emails_after = 'after:2023/01/01'
+        num = 500
+    else:
+        read_emails_after = 'after:' + \
+            subtract_1_day(format_date(lastMsgInboxDate))
+        num = 100
 
-    print("lastMsgInboxDate:",lastMsgInboxDate)
-    print("read_emails_after: ",read_emails_after)
+    print("lastMsgInboxDate:", lastMsgInboxDate)
+    print("read_emails_after: ", read_emails_after)
     try:
         # Call the Gmail API
         service = build('gmail', 'v1', credentials=creds)
         # results = service.users().messages().list(userId='me', labelIds=['INBOX'], q="is:unread").execute()
-        results = service.users().messages().list(userId='me', labelIds=['INBOX'], maxResults=num).execute()
+        results = service.users().messages().list(userId='me', labelIds=[
+            'INBOX'], maxResults=num,  q=read_emails_after).execute()
         messages = results.get('messages', [])
         total_messages = results.get('resultSizeEstimate')
         print("total_messages: ", total_messages)
@@ -123,48 +102,22 @@ def call_gmail_api(creds,user, num):
         return None
 
 
-def count_unread_messages(messages):
-    """
-    This function counts the number of unread messages.
-    """
-    if not messages:
-        print('No unread messages found.')
-        return 0
-    else:
-        return len(messages)
-
-
-def check_user_inbox_unread(db, user):
-    """
-    This function retrieves the number of unread messages in the Gmail inbox.
-    """
-    creds = get_credentials(db, user)
-    messages = call_gmail_api(creds)
-    unread_count = count_unread_messages(messages)
-    return unread_count
-
-
-def get_last_date(email_data_list):
-    # Initialize a variable to store the last date
-    last_date = email_data_list[0]['date']
-    return last_date
-
-
-def read_emails_DB(db, user,num):
-    print("read_emails_DB: ",user.id)
-    count_email=0
+def read_emails_DB(db, user):
+    print("read_emails_DB: ", user.id)
+    count_email = 0
     # Call the function that retrieves the Gmail API credentials
     creds = get_credentials(db, user)
     # Call the function that retrieves the list of messages
-    messages = call_gmail_api(creds,user,num)
+    messages = call_gmail_api(creds, user)
     # Build the Gmail API service
     service = build('gmail', 'v1', credentials=creds)
     # Initialize an empty list to store the data of each email
     email_data_list = []
     # Loop through each message in the list of messages
-    for message in messages:
+    for message in reversed(messages[-10:]):
         # Get the details of the current message
-        msg = service.users().messages().get(userId='me', id=message['id']).execute()
+        msg = service.users().messages().get(
+            userId='me', id=message['id']).execute()
         # Get the headers of the current message
         headers = msg['payload']['headers']
         # Initialize an empty dictionary to store the data of the current email
@@ -178,8 +131,10 @@ def read_emails_DB(db, user,num):
                 from_name = values["value"]
                 email_data['from'] = from_name
             # If the name of the current header is "Date", store the value in the "date" key of the email_data dictionary
+
             if name == 'Date':
                 date = values["value"]
+
                 email_data['date'] = date
             if name == 'Subject':
                 subject = values["value"]
@@ -210,13 +165,13 @@ def read_emails_DB(db, user,num):
             body = body.decode('utf-8')
             # Store the decoded data in the "body" key of the email_data dictionary
             email_data['body'] = body
-        count_email+=1
-        print("count_email: ", count_email)
+        # Check Emails
+        count_email += 1
+        print("count_email: ", count_email,
+              "Date: ", date, "Subject: ", subject)
         # Append the email_data dictionary to the email_data_list
         email_data_list.append(email_data)
-    # Print the email_data_list
-    # print(email_data_list)
-    # Return email_data_list
+
     return email_data_list
 
 
@@ -250,25 +205,29 @@ def save_emails_to_Firebase(db, user, email_data_list, lastMsgInboxDate):
     for email_data in email_data_list:
 
         date = format_date(email_data.get("date"))
+        datetime = format_dateAsDatetime(email_data.get("date"))
         # Check if the date of the current email is greater than the last recorded date
         if date > ref_date:
             # Generate a new document reference and add set() operation to the batch
             email_doc_ref = user_email_ref_child.document()
             batch.set(email_doc_ref, {
                 "from": email_data.get("from"),
-                "Subject": email_data.get("subject"),
-                "date": email_data.get("date"),
+                "subject": email_data.get("subject"),
+                "date": datetime,
                 "body": email_data.get("body")
             })
 
             count_emails_save += 1
-
-            print(count_emails_save, "Subject: ", email_data.get("subject"), "date: ", email_data.get("date"))
+            print("This is the type of date:", type(datetime))
+            print(count_emails_save, "Subject: ", email_data.get(
+                "subject"), "date: ", email_data.get("date"))
 
     # Commit the batch
     batch.commit()
 
-    user.reference.update({'unreadEmailCount': count_emails_save + unreadEmailCount})
+    user.reference.update(
+        {'unreadEmailCount': count_emails_save + unreadEmailCount})
+
 
 def format_date(date_str):
     # Date string format: "Fri, 10 Feb 2023 03:25:47 +0000"
@@ -278,3 +237,72 @@ def format_date(date_str):
     date = datetime.strptime(date_str, '%a, %d %b %Y %H:%M:%S')
     # Return the formatted date string
     return date.strftime('%Y-%m-%d %H:%M:%S')
+
+
+def format_dateAsDatetime(date_str):
+    # Date string format: "Fri, 10 Feb 2023 03:25:47 +0000"
+    # Remove the time zone information
+    date_str = date_str[:24]
+    # Convert the date string to a datetime object
+    date = datetime.strptime(date_str, '%a, %d %b %Y %H:%M:%S')
+    # Return the formatted date string
+    return date
+
+
+"""
+Secundary fuctions
+"""
+
+
+def get_total_messages():
+
+    try:
+        service = build('gmail', 'v1', credentials=creds)
+        # Call the Gmail API to get the total number of messages in the mailbox
+        response = service.users().messages().list(
+            userId='me', labelIds=["INBOX"], maxResults=1).execute()
+        total_messages = response.get('resultSizeEstimate', 0)
+        return total_messages
+    except HttpError as error:
+        print(f'An error occurred: {error}')
+        return None
+
+
+def subtract_1_day(date_string):
+    # Convert the string to a datetime object
+    date = datetime.strptime(date_string, "%Y-%m-%d %H:%M:%S")
+
+    # Subtract 10 minutes from the datetime object
+    new_date = date - timedelta(days=1)
+
+    # Convert the datetime object back to a string in the same format as the original
+    new_date_string = datetime.strftime(new_date, "%Y-%m-%d")
+
+    return new_date_string
+
+
+def count_unread_messages(messages):
+    """
+    This function counts the number of unread messages.
+    """
+    if not messages:
+        print('No unread messages found.')
+        return 0
+    else:
+        return len(messages)
+
+
+def check_user_inbox_unread(db, user):
+    """
+    This function retrieves the number of unread messages in the Gmail inbox.
+    """
+    creds = get_credentials(db, user)
+    messages = call_gmail_api(creds)
+    unread_count = count_unread_messages(messages)
+    return unread_count
+
+
+def get_last_date(email_data_list):
+    # Initialize a variable to store the last date
+    last_date = email_data_list[-1]['date']
+    return last_date
