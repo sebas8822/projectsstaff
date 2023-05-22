@@ -13,11 +13,18 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
 import email.utils
 import datetime
 from datetime import datetime, timedelta
 import json
 
+# to clean emails
+import re
+from bs4 import BeautifulSoup
+
+# to analyzed body
+from email_body_analyser import *
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
@@ -153,8 +160,18 @@ def read_emails_DB(db, user):
                     body = base64.urlsafe_b64decode(body.encode('UTF-8'))
                     # Convert the decoded data to a string
                     body = body.decode('utf-8')
+                    #clean email body
+                    body = clean_body(body)
+                    # Data analysis
+                    response = generate_response(messages, body)
+                    # data extraction
+                    company_name, job_description, email_intention = extract_info_from_string(response)
                     # Store the decoded data in the "body" key of the email_data dictionary
                     email_data['body'] = body
+                    email_data['company_name'] = company_name
+                    email_data['job_description'] = job_description
+                    email_data['email_intention'] = email_intention
+
         # If the current message does not have parts
         else:
             # Get the data of the current message
@@ -163,8 +180,17 @@ def read_emails_DB(db, user):
             body = base64.urlsafe_b64decode(body.encode('UTF-8'))
             # Convert the decoded data to a string
             body = body.decode('utf-8')
+            # clean email body
+            body = clean_body(body)
+            # Data analysis
+            response = generate_response(messages, body)
+            # data extraction
+            company_name, job_description, email_intention = extract_info_from_string(response)
             # Store the decoded data in the "body" key of the email_data dictionary
             email_data['body'] = body
+            email_data['company_name'] = company_name
+            email_data['job_description'] = job_description
+            email_data['email_intention'] = email_intention
         # Check Emails
         count_email += 1
         print("count_email: ", count_email,
@@ -214,7 +240,11 @@ def save_emails_to_Firebase(db, user, email_data_list, lastMsgInboxDate):
                 "from": email_data.get("from"),
                 "subject": email_data.get("subject"),
                 "date": datetime,
-                "body": email_data.get("body")
+                "body": email_data.get("body"),
+                "company_name": email_data.get("company_name"),
+                "job_description": email_data.get("job_description"),
+                "email_intention": email_data.get("email_intention"),
+
             })
 
             count_emails_save += 1
@@ -252,6 +282,34 @@ def format_dateAsDatetime(date_str):
 """
 Secundary fuctions
 """
+
+def clean_body(text):
+    if has_html_tags(text):
+        print('The email body contains HTML content')
+        soup = BeautifulSoup(text, 'html.parser')
+        # extract the text content of the email body
+        soup_clean = soup.get_text()
+        return soup_clean
+    if has_url(text):
+        print("Email contains a URL")
+        # Remove URLs
+        urls_removed = re.sub(r'http\S+', '', text)
+        return urls_removed
+    else:
+        print('The email body does not contain HTML content')
+        print("Email does not contain a URL")
+        return text
+
+
+def has_url(text):
+    url_pattern = re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+')
+    return bool(url_pattern.search(text))
+def has_html_tags(text):
+    """Returns True if the given text contains HTML tags, False otherwise"""
+    return '<html>' in text.lower() or '<body>' in text.lower() or '<p>' in text.lower() or '</p>' in text.lower() or '</div>' in text.lower()
+
+
+
 
 
 def get_total_messages():
